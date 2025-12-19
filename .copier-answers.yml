@@ -1,0 +1,10 @@
+# Changes here will be overwritten by Copier
+_commit: v2.1.2
+_src_path: gh:lincc-frameworks/python-project-template
+author_email: tcabrera@andrew.cmu.edu
+author_name: Tomás Cabrera
+custom_install: false
+package_name: healpix_counterparts
+project_license: MIT
+project_name: healpix-counterparts
+project_organization: tomas-cabrera
