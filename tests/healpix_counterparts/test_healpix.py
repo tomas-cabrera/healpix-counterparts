@@ -19,8 +19,8 @@ def test_sample_2d_positions():
     selected_tiles, ras, decs = hp.sample_positions_2d(n_samples=n_samples)
     print(selected_tiles, ras, decs)
     assert len(selected_tiles) == n_samples
-    assert all(ras.deg >= 0) and all(ras.deg < 360)
-    assert all(decs.deg >= -90) and all(decs.deg <= 90)
+    assert all(ras.deg >= 0) and all(ras.deg < 360)  # type: ignore
+    assert all(decs.deg >= -90) and all(decs.deg <= 90)  # type: ignore
 
 
 def test_sample_3d_positions():
@@ -30,6 +30,6 @@ def test_sample_3d_positions():
     selected_tiles, ras, decs, dls = hp.sample_positions_3d(n_samples=n_samples)
     print(selected_tiles, ras, decs, dls)
     assert len(selected_tiles) == n_samples
-    assert all(ras.deg >= 0) and all(ras.deg < 360)
-    assert all(decs.deg >= -90) and all(decs.deg <= 90)
+    assert all(ras.deg >= 0) and all(ras.deg < 360)  # type: ignore
+    assert all(decs.deg >= -90) and all(decs.deg <= 90)  # type: ignore
     assert all(dls > 0)
