@@ -33,10 +33,14 @@ dependencies = [
 dev = [
     "asv[virtualenv]==0.6.5", # Used to compute performance benchmarks
     "jupyter", # Clears output from Jupyter notebooks
+    "nbsphinx>=0.9.8",
     "pre-commit", # Used to run checks before finalizing a git commit
     "pytest",
     "pytest-cov", # Used to report total code coverage
-    "ruff", # Used for static linting of files
+    "ruff",
+    "sphinx-autoapi>=3.8.1",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-rtd-theme>=3.1.0",
 ]
 
 [build-system]

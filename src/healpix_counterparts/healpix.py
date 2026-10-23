@@ -50,6 +50,10 @@ class HEALPix:
             else:
                 raise NotImplementedError(f"time_key '{time_key}' not implemented.")
 
+    def get_tile_areas(self):
+        """Get the area of each tile in the skymap in steradians."""
+        return lsm_moc.uniq2pixarea(self.table["UNIQ"])
+
     def load(self, order="nested", time_key=None):
         """Load the skymap as an astropy Table.
         Generates UNIQ, PROB, and PROBDENSITY columns if not present.
@@ -77,7 +81,7 @@ class HEALPix:
     def compute_ci_volume(self, ci, cache=False):
         """Calculate the volume for the given confidence interval(s).
         If cache=True, also computes and caches the min/max distance for each tile in the CI in the table,
-        with the column names "CIDLMIN" and "CIDLMAX"
+        with the column names "DISTMIN" and "DISTMAX"
         (set to np.nan if tile is not in the CI).
         Accepts multiple CIs as a list/array (only caches the first one if cache=True).
 
@@ -91,6 +95,9 @@ class HEALPix:
         :return: Volume(s) corresponding to the confidence interval(s)
         :rtype: float or np.ndarray
         """
+
+        # TODO: Implement integration of distributions over volume (disable caching)
+
         # Raise error if distance columns not in table
         missing_cols = []
         for c in ["DISTMU", "DISTSIGMA", "DISTNORM"]:
@@ -196,8 +203,8 @@ class HEALPix:
 
             # Cache in table
             self.volume_ci = cache_ci
-            self.table["CIDLMIN"] = ci_dl_mins
-            self.table["CIDLMAX"] = ci_dl_maxs
+            self.table["DISTMIN"] = ci_dl_mins
+            self.table["DISTMAX"] = ci_dl_maxs
 
         return ci_vols
 
@@ -256,11 +263,15 @@ class HEALPix:
         # Set grid
         dl_mean = np.average(self.table["DISTMU"][mask], weights=self.table["PROB"][mask])
         dl_grid = np.linspace(0, dl_mean * 6, 1001)
-        # Calculate normalized distance pdfs for each tile (n_dl x n_tiles)
+        # Calculate normalized distance pdfs for each selected tile (n_dl x n_tiles)
+        _selected_table = self.table[selected_tiles]
         pdf_dl = (
-            self.table["DISTNORM"]
-            / ((2 * np.pi) ** 0.5 * self.table["DISTSIGMA"])
-            * np.exp(-0.5 * ((np.array([dl_grid]).T - self.table["DISTMU"]) / self.table["DISTSIGMA"]) ** 2)
+            _selected_table["DISTNORM"]
+            / ((2 * np.pi) ** 0.5 * _selected_table["DISTSIGMA"])
+            * np.exp(
+                -0.5
+                * ((np.array([dl_grid]).T - _selected_table["DISTMU"]) / _selected_table["DISTSIGMA"]) ** 2
+            )
             * dl_grid[:, np.newaxis] ** 2
         )  # n_dl x n_tiles
         pdf_dl = (pdf_dl[:-1, :] + pdf_dl[1:, :]) / 2
@@ -268,8 +279,7 @@ class HEALPix:
         # Sample distances for each selected tile
         dls = np.zeros(n_samples)
         for i in range(n_samples):
-            tile_idx = selected_tiles[i]
-            cdf = np.concatenate(([0], np.cumsum(pdf_dl[:, tile_idx])))
+            cdf = np.concatenate(([0], np.cumsum(pdf_dl[:, i])))
             dls[i] = np.interp(
                 rng.uniform(0, 1),
                 cdf,
@@ -277,3 +287,24 @@ class HEALPix:
             )
         # Return
         return selected_tiles, ras, decs, dls
+
+    def get_tile_indices(self, ras, decs):
+        """Get the indices of the tiles in the skymap that correspond to the given RA/Dec coordinates."""
+        # Get levels, ipixs for all tiles
+        tile_levels, tile_ipixs = lsm_moc.uniq2nest(self.table["UNIQ"])
+        tile_nsides = ah.level_to_nside(tile_levels)
+        tile_nsides_unique = np.unique(tile_nsides)
+        # Get uniqs for given ras, decs for all levels
+        coord_ipixs = [
+            ah.lonlat_to_healpix(ras, decs, nside=tns, order="nested") for tns in tile_nsides_unique
+        ]
+        coord_uniqs = [
+            lsm_moc.nest2uniq(int(ah.nside_to_level(tns)), ipixs)
+            for tns, ipixs in zip(tile_nsides_unique, coord_ipixs, strict=True)
+        ]
+        # Select the uniqs that are in the table
+        table_uniqs_set = set(self.table["UNIQ"])
+        selected_uniqs = [uniq for uniqs in coord_uniqs for uniq in uniqs if uniq in table_uniqs_set]
+        # Get indices of selected uniqs in the table
+        selected_indices = [np.where(self.table["UNIQ"] == uniq)[0][0] for uniq in selected_uniqs]
+        return selected_indices
