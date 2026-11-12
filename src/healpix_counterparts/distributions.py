@@ -1,7 +1,9 @@
 import astropy.units as u
 import numpy as np
+from astropy.cosmology import z_at_value
 from astropy.table import QTable
-from scipy.stats import gaussian_kde, powerlaw
+from scipy.interpolate import interp1d
+from scipy.stats import gaussian_kde
 from scipy.stats.sampling import NumericalInversePolynomial
 
 
@@ -155,12 +157,15 @@ class AnalyticIsotropic:
         self.los_distance_distribution = los_distance_distribution
         self.n_total = n_total
 
-    def sum_over_healpix(self, healpix_map):
+    def sum_over_healpix(self, healpix_map, cosmo):
         """Integrate the distribution over a given HEALPix map.
 
         :param healpix_map: HEALPix map to integrate over
         :type healpix_map: _type_
+        :param cosmo: Cosmology object
+        :type cosmo: astropy.cosmology.Cosmology
         """
+
         # Get the distance bounds for each tile in the HEALPix map
         dist_mins = healpix_map.table["DISTMIN"]
         dist_maxs = healpix_map.table["DISTMAX"]
@@ -228,26 +233,126 @@ class AnalyticIsotropic:
         return ras, decs, dls
 
 
-class ConstantDensity(AnalyticIsotropic):
-    """Special case of AnalyticIsotropic with a constant number density in 3D space."""
+class Interpolated:
+    """Distribution defined via interpolation from provided grid/values."""
 
-    def __init__(self, dn_d3mpc, dl_min, dl_max):
+    def __init__(self, dl_grid, dn_d3dl_grid):
+        """Initialize an interpolated distribution.
+
+        :param dl_grid: Grid of distance values
+        :type dl_grid: array-like
+        :param dn_d3dl_grid: Corresponding los dn/d3dl values for the distance grid
+        :type dn_d3dl_grid: array-like
+        """
+        self.dl_grid = dl_grid
+        self.dn_d3dl_grid = dn_d3dl_grid
+        self.dn_d3dl_interpolator = interp1d(
+            self.dl_grid, self.dn_d3dl_grid, kind="linear", fill_value="extrapolate"
+        )
+
+    def dn_d3x(self, ras, decs, dls):
+        """Compute the number density in 3D space at the given locations.
+        Ras/decs included to maintain the calling signature, but are not used in the isotropic case.
+
+        :param ras: Right ascension values
+        :type ras: array-like
+        :param decs: Declination values
+        :type decs: array-like
+        :param dLs: Luminosity distance values
+        :type dLs: array-like
+        """
+        dn_d3dl = self.dn_d3dl_interpolator(dls)
+        return dn_d3dl
+
+    def sum_over_healpix(self, healpix_map, cosmo):
+        """Integrate the distribution over a given HEALPix map.
+
+        :param healpix_map: HEALPix map to integrate over
+        :type healpix_map: _type_
+        :param cosmo: Cosmology object
+        :type cosmo: astropy.cosmology.FlatLambdaCDM
+        :return: Total number of objects in the HEALPix map
+        :rtype: float
+        """
+
+        # Make a distance grid that covers the range of distances in the HEALPix map
+        dl_mins = healpix_map.table["DISTMIN"]
+        dl_maxs = healpix_map.table["DISTMAX"]
+        dl_grid = np.linspace(np.nanmin(dl_mins), np.nanmax(dl_maxs), 1000)
+        # Add all the distance bounds to the grid to ensure we capture the edges
+        dl_grid = np.unique(np.concatenate([dl_grid, dl_mins, dl_maxs]))
+        # Calculate integrand
+        dn_d3dl_grid = self.dn_d3dl_interpolator(dl_grid)
+        dn_domega_dl_grid = dn_d3dl_grid * dl_grid**2
+        # Get trapezoidal contribution for each step in dl_grid
+        trap_dl_grid = np.diff(dl_grid) * (dn_domega_dl_grid[:-1] + dn_domega_dl_grid[1:]) / 2
+        # Outer product by the tile areas to get total contribution for each voxel
+        trap_voxel_grid = np.outer(
+            trap_dl_grid, healpix_map.get_tile_areas()
+        )  # len(dl_grid)-1 x len(healpix_map.table)
+        # Mask out the contributions that are outside the distance bounds for each tile
+        dl_mins = healpix_map.table["DISTMIN"]
+        dl_maxs = healpix_map.table["DISTMAX"]
+        dl_grid_mids = (dl_grid[:-1] + dl_grid[1:]) / 2
+        mask = np.greater_equal.outer(dl_grid_mids, dl_mins) & np.less_equal.outer(dl_grid_mids, dl_maxs)
+        # Sum over the distance grid and tile areas to get total count
+        total_count = np.nansum(trap_voxel_grid[mask])
+
+        return total_count
+
+    def sample_positions(self, n_samples, rng=None):
+        """Generate random samples from the interpolated distribution.
+
+        :param n_samples: Number of random samples to generate
+        :type n_samples: int
+        :param rng: Random number generator instance (optional)
+        :type rng: np.random.Generator, optional
+        :return: Randomly sampled positions (ras, decs, dls)
+        :rtype: tuple of arrays
+        """
+        # Set rng if needed
+        if rng is None:
+            rng = np.random.default_rng()
+        # Scale density by dl**2
+        p_dl = self.dn_d3dl_interpolator(self.dl_grid) * self.dl_grid**2
+        # Draw samples from the distribution using inverse transform sampling
+        cdf = np.cumsum(p_dl)
+        cdf /= cdf[-1]
+        dls = np.interp(rng.uniform(0, 1, size=n_samples), cdf, self.dl_grid)
+        # Sample random directions uniformly on the sphere
+        ras = rng.uniform(0, 360, size=n_samples)
+        decs = np.degrees(np.arcsin(rng.uniform(-1, 1, size=n_samples)))
+        return ras, decs, dls
+
+
+class UniformComovingDensity(Interpolated):
+    """Special case of Interpolated with a constant comoving number density in 3D space."""
+
+    def __init__(self, dn_d3dm, dl_min, dl_max, cosmo, n_dl=1000):
         """Initialize a constant density distribution.
 
-        :param dn_d3mpc: Constant number density in Mpc^-3
-        :type dn_d3mpc: float
+        :param dn_d3dm: Constant comoving number density in Mpc^-3
+        :type dn_d3dm: float
         :param dl_min: Minimum distance for the distribution
         :type dl_min: float
         :param dl_max: Maximum distance for the distribution
         :type dl_max: float
+        :param cosmo: Cosmology instance for distance calculations
+        :type cosmo: astropy.cosmology.Cosmology
         """
 
         # Save params
-        self.dn_d3mpc = dn_d3mpc
+        self.dn_d3dm = dn_d3dm
         self.dl_min = dl_min
         self.dl_max = dl_max
-
+        self.cosmo = cosmo
         # Create a uniform distribution over the specified distance range
-        uniform_dist = powerlaw(a=3, loc=dl_min, scale=dl_max - dl_min)
-        n_total = dn_d3mpc * (4 / 3) * np.pi * (dl_max**3 - dl_min**3)
-        super().__init__(uniform_dist, n_total)
+        if dl_min == 0:
+            dl_grid = np.linspace(dl_min, dl_max, n_dl + 1)[1:]
+        else:
+            dl_grid = np.linspace(dl_min, dl_max, n_dl)
+        dm_grid = cosmo.comoving_distance(z_at_value(cosmo.luminosity_distance, dl_grid * u.Mpc)).value
+        dn_d3dm_grid = np.full_like(dm_grid, dn_d3dm)
+        ddm_per_ddl_grid = np.gradient(dm_grid, dl_grid)
+        dn_d3dl_grid = dn_d3dm_grid * ddm_per_ddl_grid**3
+        super().__init__(dl_grid, dn_d3dl_grid)

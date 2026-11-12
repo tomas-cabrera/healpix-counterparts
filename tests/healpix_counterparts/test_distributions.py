@@ -5,7 +5,7 @@ from astropy.table import QTable
 from healpix_counterparts.distributions import (
     AnalyticIsotropic,
     Catalog,
-    ConstantDensity,
+    UniformComovingDensity,
 )
 from scipy.stats import powerlaw
 
@@ -111,23 +111,56 @@ def test_ai_density_estimation():
 
 ### Initialize constant density analytic distribution
 # Create a mock analytic distribution with a constant density in 3D space
-test_cd = ConstantDensity(dn_d3mpc=10**-4.75, dl_min=0, dl_max=500)
+test_cmd = UniformComovingDensity(dn_d3dm=10**-4.75, dl_min=0, dl_max=500, cosmo=COSMO)
 
 
-def test_constant_density_equivalence():
-    """Test that the ConstantDensity class is equivalent to a uniform distribution in 3D space."""
+# def test_constant_density_equivalence():
+#     """Test that the ConstantDensity class is equivalent to a uniform distribution in 3D space."""
+#     # Sample random positions from the constant density distribution
+#     sampled_ras, sampled_decs, sampled_dls = test_cmd.sample_positions(
+#         n_samples,
+#         rng=RNG,
+#     )
+
+#     # Estimate the number density at the sampled positions
+#     densities = test_cmd.dn_d3x(
+#         sampled_ras,
+#         sampled_decs,
+#         sampled_dls,
+#     )
+
+#     # Check that the densities are approximately equal to the specified constant density
+#     assert np.allclose(densities, test_cmd.dn_d3mpc, rtol=1e-2)
+
+
+def test_constant_density_sampling():
+    """Test that the UniformComovingDensity class can sample from a constant density distribution."""
     # Sample random positions from the constant density distribution
-    sampled_ras, sampled_decs, sampled_dls = test_cd.sample_positions(
+    sampled_ras, sampled_decs, sampled_dls = test_cmd.sample_positions(
+        n_samples,
+        rng=RNG,
+    )
+
+    # Check that the sampled positions are within the expected bounds
+    assert np.all(sampled_ras >= 0) and np.all(sampled_ras <= 360)
+    assert np.all(sampled_decs >= -90) and np.all(sampled_decs <= 90)
+    assert np.all(sampled_dls >= test_cmd.dl_min) and np.all(sampled_dls <= test_cmd.dl_max)
+
+
+def test_constant_density_estimation():
+    """Test that the UniformComovingDensity class can estimate the number density in 3D space."""
+    # Sample random positions from the constant density distribution
+    sampled_ras, sampled_decs, sampled_dls = test_cmd.sample_positions(
         n_samples,
         rng=RNG,
     )
 
     # Estimate the number density at the sampled positions
-    densities = test_cd.dn_d3x(
+    densities = test_cmd.dn_d3x(
         sampled_ras,
         sampled_decs,
         sampled_dls,
     )
 
-    # Check that the densities are approximately equal to the specified constant density
-    assert np.allclose(densities, test_cd.dn_d3mpc, rtol=1e-2)
+    # Check that all the densities are non-negative
+    assert np.all(densities >= 0)

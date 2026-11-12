@@ -78,7 +78,7 @@ class HEALPix:
         if time_key is not None:
             self._get_time_from_header(time_key)
 
-    def compute_ci_volume(self, ci, cache=False):
+    def compute_ci_volume(self, ci, dn_d3dl=None, cache=False):
         """Calculate the volume for the given confidence interval(s).
         If cache=True, also computes and caches the min/max distance for each tile in the CI in the table,
         with the column names "DISTMIN" and "DISTMAX"
